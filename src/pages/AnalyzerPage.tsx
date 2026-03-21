@@ -302,7 +302,7 @@ export default function AnalyzerPage() {
 
       <section className="card">
         <h2>Statement Upload</h2>
-        <p className="muted">Upload a CSV/TSV statement export to extract transactions automatically.</p>
+        <p className="muted">Upload a CSV, TSV, Excel (.xlsx), or PDF statement to extract transactions automatically.</p>
         {isLoadingSavedData ? <p className="muted">Loading your saved data...</p> : null}
         {!isLoadingSavedData && isPersistenceReady ? (
           <p className="muted">Persistence is active. Extracted transactions are saved to Supabase.</p>
@@ -314,7 +314,7 @@ export default function AnalyzerPage() {
         <div className="upload-row">
           <input
             type="file"
-            accept=".csv,.tsv,.txt,text/csv,text/plain"
+            accept=".csv,.tsv,.txt,.xlsx,.pdf,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/pdf"
             onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)}
           />
           <button type="button" onClick={handleExtract} disabled={isExtracting}>

@@ -179,19 +179,68 @@ function parseText(text: string): ParsedTransaction[] {
   return records
 }
 
+async function parseXlsx(file: File): Promise<ParsedTransaction[]> {
+  const readXlsxFile = (await import('read-excel-file/browser')).default
+  const rows = await readXlsxFile(file)
+  if (rows.length < 2) return []
+
+  const toCell = (cell: unknown): string => {
+    if (cell instanceof Date) return cell.toISOString().slice(0, 10)
+    if (cell === null || cell === undefined) return ''
+    return String(cell)
+  }
+
+  const csvText = (rows as unknown[][])
+    .map((row: unknown[]) => row.map((cell: unknown) => `"${toCell(cell).replace(/"/g, '""')}"`).join(','))
+    .join('\n')
+
+  return parseCsv(csvText)
+}
+
+async function parsePdf(buffer: ArrayBuffer): Promise<ParsedTransaction[]> {
+  const pdfjsLib = await import('pdfjs-dist')
+  pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+    'pdfjs-dist/build/pdf.worker.min.mjs',
+    import.meta.url
+  ).href
+
+  const pdf = await pdfjsLib.getDocument({ data: buffer }).promise
+  let fullText = ''
+
+  for (let i = 1; i <= pdf.numPages; i += 1) {
+    const page = await pdf.getPage(i)
+    const content = await page.getTextContent()
+    const pageText = content.items
+      .map((item) => ('str' in item ? (item as { str: string }).str : ''))
+      .join(' ')
+    fullText += pageText + '\n'
+  }
+
+  const csvCandidate = parseCsv(fullText)
+  if (csvCandidate.length > 0) return csvCandidate
+  return parseText(fullText)
+}
+
 export async function extractTransactionsFromFile(file: File): Promise<ParsedTransaction[]> {
-  const text = await file.text()
   const lowerName = file.name.toLowerCase()
+
+  if (lowerName.endsWith('.xlsx')) {
+    return parseXlsx(file)
+  }
+
+  if (lowerName.endsWith('.pdf')) {
+    const buffer = await file.arrayBuffer()
+    return parsePdf(buffer)
+  }
+
+  const text = await file.text()
 
   if (lowerName.endsWith('.csv') || lowerName.endsWith('.tsv')) {
     return parseCsv(text)
   }
 
   const csvCandidate = parseCsv(text)
-  if (csvCandidate.length > 0) {
-    return csvCandidate
-  }
-
+  if (csvCandidate.length > 0) return csvCandidate
   return parseText(text)
 }
 
