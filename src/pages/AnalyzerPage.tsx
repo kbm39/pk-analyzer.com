@@ -68,6 +68,8 @@ export default function AnalyzerPage() {
   const [payeeRules, setPayeeRules] = useState<PayeeRule[]>([])
   const [payeeSearch, setPayeeSearch] = useState('')
   const [payeeRuleCategory, setPayeeRuleCategory] = useState('')
+  const [transactionSearchTerm, setTransactionSearchTerm] = useState('')
+  const [isSavingPayeeRule, setIsSavingPayeeRule] = useState(false)
   const [userId, setUserId] = useState<string | null>(null)
   const [isPersistenceReady, setIsPersistenceReady] = useState(false)
   const [newCategory, setNewCategory] = useState('')
@@ -75,6 +77,17 @@ export default function AnalyzerPage() {
   const [message, setMessage] = useState('')
   const [isExtracting, setIsExtracting] = useState(false)
   const [isLoadingSavedData, setIsLoadingSavedData] = useState(false)
+
+  const isMissingPayeeRulesTableError = (value: unknown): boolean => {
+    if (!value || typeof value !== 'object') return false
+    const errorLike = value as { message?: string; code?: string }
+    return (
+      errorLike.code === '42P01' ||
+      (typeof errorLike.message === 'string' &&
+        errorLike.message.toLowerCase().includes('relation') &&
+        errorLike.message.toLowerCase().includes('payee_rules'))
+    )
+  }
 
   useEffect(() => {
     const loadSavedData = async () => {
@@ -157,11 +170,15 @@ export default function AnalyzerPage() {
 
       setTransactions(loadedTransactions)
 
-      const { data: ruleRows } = await supabase
+      const { data: ruleRows, error: ruleReadError } = await supabase
         .from('payee_rules')
         .select('id, payee_pattern, category_name')
         .eq('user_id', user.id)
         .order('payee_pattern', { ascending: true })
+
+      if (ruleReadError && !isMissingPayeeRulesTableError(ruleReadError)) {
+        setError(ruleReadError.message)
+      }
 
       setPayeeRules(((ruleRows as DbPayeeRule[]) ?? []).map((r) => ({
         id: String(r.id),
@@ -193,6 +210,38 @@ export default function AnalyzerPage() {
     }
     return [...map.entries()].sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))
   }, [transactions])
+
+  const displayedTransactions = useMemo(() => {
+    const term = transactionSearchTerm.trim().toLowerCase()
+    if (!term) {
+      return transactions
+    }
+
+    const score = (tx: Transaction): number => {
+      const description = tx.description.toLowerCase()
+      const category = tx.category.toLowerCase()
+      const date = tx.date.toLowerCase()
+
+      if (description === term) return 100
+      if (description.startsWith(term)) return 80
+      if (description.includes(term)) return 60
+      if (category.startsWith(term)) return 40
+      if (category.includes(term)) return 30
+      if (date.includes(term)) return 20
+      return 0
+    }
+
+    return [...transactions]
+      .filter((tx) => {
+        const haystack = `${tx.description} ${tx.category} ${tx.date} ${tx.amount}`.toLowerCase()
+        return haystack.includes(term)
+      })
+      .sort((a, b) => {
+        const diff = score(b) - score(a)
+        if (diff !== 0) return diff
+        return b.date.localeCompare(a.date)
+      })
+  }, [transactionSearchTerm, transactions])
 
   const handleExtract = async () => {
     if (!selectedFile) {
@@ -328,42 +377,88 @@ export default function AnalyzerPage() {
 
   const handleSavePayeeRule = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
+    setError('')
+    setMessage('')
+
     const pattern = payeeSearch.trim()
     const category = payeeRuleCategory.trim()
-    if (!pattern || !category) return
+    if (!pattern || !category) {
+      setError('Enter a payee and select a category before saving.')
+      return
+    }
+
+    setIsSavingPayeeRule(true)
 
     const existing = payeeRules.find((r) => r.payee_pattern.toLowerCase() === pattern.toLowerCase())
 
-    if (isPersistenceReady && supabase && userId) {
-      if (existing) {
-        const { error: updateError } = await supabase
-          .from('payee_rules')
-          .update({ category_name: category })
-          .eq('id', existing.id)
-          .eq('user_id', userId)
-        if (updateError) { setError(updateError.message); return }
-        setPayeeRules((prev) => prev.map((r) => r.id === existing.id ? { ...r, category_name: category } : r))
-      } else {
-        const { data, error: insertError } = await supabase
-          .from('payee_rules')
-          .insert({ user_id: userId, payee_pattern: pattern, category_name: category })
-          .select('id, payee_pattern, category_name')
-          .single()
-        if (insertError) { setError(insertError.message); return }
-        const row = data as DbPayeeRule
-        setPayeeRules((prev) => [...prev, { id: String(row.id), payee_pattern: row.payee_pattern, category_name: row.category_name }])
-      }
-    } else {
-      if (existing) {
-        setPayeeRules((prev) => prev.map((r) => r.payee_pattern.toLowerCase() === pattern.toLowerCase() ? { ...r, category_name: category } : r))
-      } else {
-        setPayeeRules((prev) => [...prev, { id: `local-${Date.now()}`, payee_pattern: pattern, category_name: category }])
-      }
-    }
+    try {
+      if (isPersistenceReady && supabase && userId) {
+        if (existing) {
+          const { error: updateError } = await supabase
+            .from('payee_rules')
+            .update({ category_name: category })
+            .eq('id', existing.id)
+            .eq('user_id', userId)
 
-    setMessage(`Rule saved: "${pattern}" → ${category}`)
-    setPayeeSearch('')
-    setPayeeRuleCategory('')
+          if (updateError && !isMissingPayeeRulesTableError(updateError)) {
+            setError(updateError.message)
+            return
+          }
+
+          setPayeeRules((prev) =>
+            prev.map((r) =>
+              r.id === existing.id || r.payee_pattern.toLowerCase() === pattern.toLowerCase()
+                ? { ...r, category_name: category }
+                : r,
+            ),
+          )
+        } else {
+          const { data, error: insertError } = await supabase
+            .from('payee_rules')
+            .insert({ user_id: userId, payee_pattern: pattern, category_name: category })
+            .select('id, payee_pattern, category_name')
+            .single()
+
+          if (insertError && !isMissingPayeeRulesTableError(insertError)) {
+            setError(insertError.message)
+            return
+          }
+
+          if (data) {
+            const row = data as DbPayeeRule
+            setPayeeRules((prev) => [
+              ...prev,
+              { id: String(row.id), payee_pattern: row.payee_pattern, category_name: row.category_name },
+            ])
+          } else {
+            setPayeeRules((prev) => [
+              ...prev,
+              { id: `local-${Date.now()}`, payee_pattern: pattern, category_name: category },
+            ])
+            setMessage('Rule saved locally. Run the payee_rules SQL to persist rules in Supabase.')
+          }
+        }
+      } else {
+        if (existing) {
+          setPayeeRules((prev) =>
+            prev.map((r) =>
+              r.payee_pattern.toLowerCase() === pattern.toLowerCase() ? { ...r, category_name: category } : r,
+            ),
+          )
+        } else {
+          setPayeeRules((prev) => [
+            ...prev,
+            { id: `local-${Date.now()}`, payee_pattern: pattern, category_name: category },
+          ])
+        }
+      }
+
+      setMessage((prev) => prev || `Rule saved: "${pattern}" -> ${category}`)
+      setPayeeSearch('')
+      setPayeeRuleCategory('')
+    } finally {
+      setIsSavingPayeeRule(false)
+    }
   }
 
   const handleDeletePayeeRule = async (rule: PayeeRule) => {
@@ -473,8 +568,13 @@ export default function AnalyzerPage() {
               <option key={cat} value={cat}>{cat}</option>
             ))}
           </select>
-          <button type="submit" disabled={!payeeSearch.trim() || !payeeRuleCategory}>Save Rule</button>
+          <button type="submit" disabled={isSavingPayeeRule || !payeeSearch.trim() || !payeeRuleCategory}>
+            {isSavingPayeeRule ? 'Saving...' : 'Save Rule'}
+          </button>
         </form>
+
+        {error ? <p className="status error">{error}</p> : null}
+        {message ? <p className="status success">{message}</p> : null}
 
         {payeeRules.length > 0 ? (
           <table className="payee-rules-table">
@@ -511,12 +611,24 @@ export default function AnalyzerPage() {
       <section className="card">
         <h2>Transaction Results</h2>
         <p className="muted">
-          {transactions.length > 0
-            ? `${transactions.length} transactions extracted.`
+          {displayedTransactions.length > 0
+            ? `${displayedTransactions.length} transaction${displayedTransactions.length === 1 ? '' : 's'} shown.`
             : 'No extracted transactions yet.'}
         </p>
 
-        {transactions.length > 0 ? (
+        <div className="inline-form">
+          <input
+            type="text"
+            placeholder="Search transactions (payee, category, date, amount)"
+            value={transactionSearchTerm}
+            onChange={(event) => setTransactionSearchTerm(event.target.value)}
+          />
+          <button type="button" className="secondary" onClick={() => setTransactionSearchTerm('')}>
+            Clear
+          </button>
+        </div>
+
+        {displayedTransactions.length > 0 ? (
           <>
             <div className="stats-grid">
               <div className="stat-box">
@@ -544,7 +656,7 @@ export default function AnalyzerPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {transactions.map((tx) => (
+                  {displayedTransactions.map((tx) => (
                     <tr key={tx.id}>
                       <td>{tx.date}</td>
                       <td>{tx.description}</td>
