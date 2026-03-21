@@ -2,6 +2,7 @@ export type ParsedTransaction = {
   date: string
   description: string
   amount: number
+  category?: string
 }
 
 const MAX_TRANSACTIONS = 1000
@@ -110,6 +111,7 @@ function parseCsv(text: string): ParsedTransaction[] {
   const amountIndex = getColumnIndex(headers, ['amount', 'value'])
   const debitIndex = getColumnIndex(headers, ['debit', 'withdrawal'])
   const creditIndex = getColumnIndex(headers, ['credit', 'deposit'])
+  const categoryIndex = getColumnIndex(headers, ['category', 'type', 'memo'])
 
   const records: ParsedTransaction[] = []
 
@@ -132,7 +134,9 @@ function parseCsv(text: string): ParsedTransaction[] {
       continue
     }
 
-    records.push({ date, description, amount })
+    const rawCategory = categoryIndex >= 0 ? (fields[categoryIndex] ?? '').trim() : undefined
+
+    records.push({ date, description, amount, ...(rawCategory ? { category: rawCategory } : {}) })
   }
 
   return records

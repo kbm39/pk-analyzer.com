@@ -170,12 +170,14 @@ a:hover {
 
 .inline-form {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.6rem;
   margin-top: 0.9rem;
 }
 
 .inline-form input {
   flex: 1;
+  min-width: 140px;
 }
 
 .pill-list {
@@ -286,4 +288,38 @@ th {
   .inline-form button {
     width: 100%;
   }
+}
+
+.payee-rules-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 0.95rem;
+  font-size: 0.9rem;
+}
+
+.payee-rules-table th,
+.payee-rules-table td {
+  text-align: left;
+  padding: 0.5rem 0.6rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.payee-rules-table th {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.82rem;
+}
+
+button.danger-small {
+  background: #fee4e2;
+  color: var(--danger);
+  border: none;
+  border-radius: 6px;
+  padding: 0.25rem 0.55rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+button.danger-small:hover {
+  background: #fecaca;
 }
