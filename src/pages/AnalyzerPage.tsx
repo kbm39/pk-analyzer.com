@@ -69,6 +69,7 @@ export default function AnalyzerPage() {
   const [payeeSearch, setPayeeSearch] = useState('')
   const [payeeRuleCategory, setPayeeRuleCategory] = useState('')
   const [transactionSearchTerm, setTransactionSearchTerm] = useState('')
+  const [transactionSearchMode, setTransactionSearchMode] = useState<'pin' | 'filter'>('pin')
   const [isSavingPayeeRule, setIsSavingPayeeRule] = useState(false)
   const [userId, setUserId] = useState<string | null>(null)
   const [isPersistenceReady, setIsPersistenceReady] = useState(false)
@@ -231,17 +232,32 @@ export default function AnalyzerPage() {
       return 0
     }
 
-    return [...transactions]
-      .filter((tx) => {
-        const haystack = `${tx.description} ${tx.category} ${tx.date} ${tx.amount}`.toLowerCase()
-        return haystack.includes(term)
-      })
+    const withMatchState = transactions.map((tx) => {
+      const haystack = `${tx.description} ${tx.category} ${tx.date} ${tx.amount}`.toLowerCase()
+      const isMatch = haystack.includes(term)
+      return { tx, isMatch, rank: score(tx) }
+    })
+
+    if (transactionSearchMode === 'filter') {
+      return withMatchState
+        .filter((entry) => entry.isMatch)
+        .sort((a, b) => {
+          const diff = b.rank - a.rank
+          if (diff !== 0) return diff
+          return b.tx.date.localeCompare(a.tx.date)
+        })
+        .map((entry) => entry.tx)
+    }
+
+    return withMatchState
       .sort((a, b) => {
-        const diff = score(b) - score(a)
+        if (a.isMatch !== b.isMatch) return a.isMatch ? -1 : 1
+        const diff = b.rank - a.rank
         if (diff !== 0) return diff
-        return b.date.localeCompare(a.date)
+        return b.tx.date.localeCompare(a.tx.date)
       })
-  }, [transactionSearchTerm, transactions])
+      .map((entry) => entry.tx)
+  }, [transactionSearchMode, transactionSearchTerm, transactions])
 
   const handleExtract = async () => {
     if (!selectedFile) {
@@ -623,6 +639,14 @@ export default function AnalyzerPage() {
             value={transactionSearchTerm}
             onChange={(event) => setTransactionSearchTerm(event.target.value)}
           />
+          <select
+            value={transactionSearchMode}
+            onChange={(event) => setTransactionSearchMode(event.target.value as 'pin' | 'filter')}
+            aria-label="Search mode"
+          >
+            <option value="pin">Pin matches to top</option>
+            <option value="filter">Show matches only</option>
+          </select>
           <button type="button" className="secondary" onClick={() => setTransactionSearchTerm('')}>
             Clear
           </button>
