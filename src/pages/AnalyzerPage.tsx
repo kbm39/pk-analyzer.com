@@ -847,9 +847,11 @@ export default function AnalyzerPage() {
       <section className="card">
         <h2>Transaction Results</h2>
         <p className="muted">
-          {displayedTransactions.length > 0
-            ? `${displayedTransactions.length} transaction${displayedTransactions.length === 1 ? '' : 's'} shown.`
-            : 'No extracted transactions yet.'}
+          {transactions.length === 0
+            ? 'No extracted transactions yet.'
+            : transactionSearchTerm.trim() && transactionSearchMode === 'filter'
+              ? `${displayedTransactions.length} of ${transactions.length} transaction${transactions.length === 1 ? '' : 's'} (filtered)`
+              : `${transactions.length} transaction${transactions.length === 1 ? '' : 's'} total`}
         </p>
 
         <div className="inline-form">
