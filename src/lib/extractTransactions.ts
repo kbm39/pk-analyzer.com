@@ -201,23 +201,51 @@ async function parseXlsx(file: File): Promise<ParsedTransaction[]> {
   return parseCsv(csvText)
 }
 
-async function parsePdf(buffer: ArrayBuffer): Promise<ParsedTransaction[]> {
-  const pdfjsLib = await import('pdfjs-dist')
-  pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-    'pdfjs-dist/build/pdf.worker.min.mjs',
-    import.meta.url
-  ).href
-
-  const pdf = await pdfjsLib.getDocument({ data: buffer }).promise
+async function extractPdfText(
+  pdfjsLib: {
+    getDocument: (args: { data: ArrayBuffer; disableWorker?: boolean }) => {
+      promise: Promise<{ numPages: number; getPage: (n: number) => Promise<{ getTextContent: () => Promise<{ items: unknown[] }> }> }>
+    }
+    GlobalWorkerOptions?: { workerSrc?: string }
+  },
+  buffer: ArrayBuffer,
+  disableWorker = false,
+): Promise<string> {
+  const pdf = await pdfjsLib.getDocument({ data: buffer, disableWorker }).promise
   let fullText = ''
 
   for (let i = 1; i <= pdf.numPages; i += 1) {
-    const page = await pdf.getPage(i)
-    const content = await page.getTextContent()
-    const pageText = content.items
-      .map((item) => ('str' in item ? (item as { str: string }).str : ''))
-      .join(' ')
-    fullText += pageText + '\n'
+    try {
+      const page = await pdf.getPage(i)
+      const content = await page.getTextContent()
+      const pageText = content.items
+        .map((item) => ('str' in (item as Record<string, unknown>) ? String((item as { str: unknown }).str ?? '') : ''))
+        .join(' ')
+      fullText += `${pageText}\n`
+    } catch {
+      // Skip problematic pages and continue extracting whatever is readable.
+    }
+  }
+
+  return fullText
+}
+
+async function parsePdf(buffer: ArrayBuffer): Promise<ParsedTransaction[]> {
+  let fullText = ''
+
+  try {
+    const pdfjsLib = await import('pdfjs-dist')
+    if (pdfjsLib.GlobalWorkerOptions) {
+      pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+        'pdfjs-dist/build/pdf.worker.min.mjs',
+        import.meta.url,
+      ).href
+    }
+    fullText = await extractPdfText(pdfjsLib, buffer)
+  } catch {
+    // Fallback for PDFs/environments that fail on the default bundle/worker path.
+    const legacyPdfJsLib = await import('pdfjs-dist/legacy/build/pdf.mjs')
+    fullText = await extractPdfText(legacyPdfJsLib, buffer, true)
   }
 
   const csvCandidate = parseCsv(fullText)
