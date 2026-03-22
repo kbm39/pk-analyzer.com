@@ -8,6 +8,7 @@ export type ParsedTransaction = {
 const MAX_TRANSACTIONS = 1000
 
 const amountPattern = /\(?-?\$?\s*[\d,]+(?:\.\d{1,2})?\)?/
+const datePattern = /(\d{1,2}[\/-]\d{1,2}(?:[\/-]\d{2,4})?|\d{4}[\/-]\d{1,2}[\/-]\d{1,2}|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+\d{1,2}(?:,\s*\d{2,4})?)/i
 
 function toNumber(raw: string): number | null {
   const cleaned = raw.replace(/\$/g, '').replace(/,/g, '').trim()
@@ -86,6 +87,22 @@ function normalizeDate(raw: string): string {
     return `${year}-${month}-${day}`
   }
 
+  const yyyymmdd = value.match(/^(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})$/)
+  if (yyyymmdd) {
+    const year = yyyymmdd[1]
+    const month = yyyymmdd[2].padStart(2, '0')
+    const day = yyyymmdd[3].padStart(2, '0')
+    return `${year}-${month}-${day}`
+  }
+
+  const monthNamed = value.match(/^([a-zA-Z]{3,9})\s+(\d{1,2})(?:,\s*(\d{2,4}))?$/)
+  if (monthNamed) {
+    const yearPart = monthNamed[3] ?? String(new Date().getFullYear())
+    const year = yearPart.length === 2 ? `20${yearPart}` : yearPart
+    const parsedNamed = new Date(`${monthNamed[1]} ${monthNamed[2]}, ${year}`)
+    if (!Number.isNaN(parsedNamed.getTime())) return parsedNamed.toISOString().slice(0, 10)
+  }
+
   return value
 }
 
@@ -158,7 +175,7 @@ function parseText(text: string): ParsedTransaction[] {
     }
 
     const amountMatch = line.match(amountPattern)
-    const dateMatch = line.match(/(\d{1,2}[\/-]\d{1,2}(?:[\/-]\d{2,4})?)/)
+    const dateMatch = line.match(datePattern)
     if (!amountMatch || !dateMatch) {
       continue
     }
@@ -180,6 +197,46 @@ function parseText(text: string): ParsedTransaction[] {
     }
 
     records.push({ date, description, amount })
+  }
+
+  return records
+}
+
+function parseStatementLikeLines(text: string): ParsedTransaction[] {
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+
+  const records: ParsedTransaction[] = []
+
+  for (const line of lines) {
+    if (records.length >= MAX_TRANSACTIONS) break
+
+    const dateMatch = line.match(datePattern)
+    if (!dateMatch) continue
+
+    const amounts = Array.from(line.matchAll(/\(?-?\$?\s*[\d,]+(?:\.\d{2})\)?/g))
+    const amountToken = amounts.length > 0 ? amounts[amounts.length - 1][0] : null
+    if (!amountToken) continue
+
+    const amount = toNumber(amountToken)
+    if (amount === null) continue
+
+    const dateToken = dateMatch[0]
+    const description = line
+      .replace(dateToken, ' ')
+      .replace(amountToken, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+
+    if (!description || description.length < 2) continue
+
+    records.push({
+      date: normalizeDate(dateToken),
+      description,
+      amount,
+    })
   }
 
   return records
@@ -289,7 +346,7 @@ async function extractPdfTextWithOcr(buffer: ArrayBuffer): Promise<string> {
     ])
 
     const pdf = await pdfjsLib.getDocument({ data: buffer, disableWorker: true } as any).promise
-    const pageLimit = Math.min(pdf.numPages, 8)
+    const pageLimit = Math.min(pdf.numPages, 20)
     let fullText = ''
 
     for (let i = 1; i <= pageLimit; i += 1) {
@@ -364,6 +421,9 @@ async function parsePdf(buffer: ArrayBuffer): Promise<ParsedTransaction[]> {
 
   const lineCandidate = parseText(fullText)
   if (lineCandidate.length > 0) return lineCandidate
+
+  const statementCandidate = parseStatementLikeLines(fullText)
+  if (statementCandidate.length > 0) return statementCandidate
 
   return parseLoosePdfText(fullText)
 }
