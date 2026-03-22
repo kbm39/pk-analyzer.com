@@ -415,10 +415,57 @@ async function extractPdfText(
     try {
       const page = await pdf.getPage(i)
       const content = await page.getTextContent()
-      const pageText = content.items
-        .map((item) => ('str' in (item as Record<string, unknown>) ? String((item as { str: unknown }).str ?? '') : ''))
-        .join(' ')
-      fullText += `${pageText}\n`
+
+      const positionedItems = content.items
+        .map((item) => {
+          const candidate = item as Record<string, unknown>
+          const str = 'str' in candidate ? String((candidate as { str: unknown }).str ?? '') : ''
+          const transform = Array.isArray(candidate.transform) ? (candidate.transform as number[]) : null
+          if (!str || !transform || transform.length < 6) return null
+          return {
+            str: str.replace(/\s+/g, ' ').trim(),
+            x: Number(transform[4] ?? 0),
+            y: Number(transform[5] ?? 0),
+          }
+        })
+        .filter((item): item is { str: string; x: number; y: number } => Boolean(item?.str))
+
+      // Group glyphs by Y coordinate to rebuild visual rows from bank statement tables.
+      if (positionedItems.length > 0) {
+        positionedItems.sort((a, b) => {
+          if (Math.abs(a.y - b.y) > 1.5) return b.y - a.y
+          return a.x - b.x
+        })
+
+        const rows: Array<{ y: number; items: Array<{ str: string; x: number }> }> = []
+        for (const item of positionedItems) {
+          const existingRow = rows.find((row) => Math.abs(row.y - item.y) <= 1.8)
+          if (existingRow) {
+            existingRow.items.push({ str: item.str, x: item.x })
+          } else {
+            rows.push({ y: item.y, items: [{ str: item.str, x: item.x }] })
+          }
+        }
+
+        rows.sort((a, b) => b.y - a.y)
+        const pageLines = rows
+          .map((row) =>
+            row.items
+              .sort((a, b) => a.x - b.x)
+              .map((entry) => entry.str)
+              .join(' ')
+              .replace(/\s+/g, ' ')
+              .trim(),
+          )
+          .filter(Boolean)
+
+        fullText += `${pageLines.join('\n')}\n`
+      } else {
+        const pageText = content.items
+          .map((item) => ('str' in (item as Record<string, unknown>) ? String((item as { str: unknown }).str ?? '') : ''))
+          .join(' ')
+        fullText += `${pageText}\n`
+      }
     } catch {
       // Skip problematic pages and continue extracting whatever is readable.
     }
