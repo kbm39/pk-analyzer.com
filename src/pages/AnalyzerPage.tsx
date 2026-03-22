@@ -582,6 +582,32 @@ export default function AnalyzerPage() {
     setCategoryChangeModal(null)
   }
 
+  const handleEraseAllTransactions = async () => {
+    if (transactions.length === 0) return
+
+    const confirmed = window.confirm('Erase all transactions? This cannot be undone.')
+    if (!confirmed) return
+
+    setError('')
+    setMessage('')
+
+    if (isPersistenceReady && supabase && userId) {
+      const { error: deleteError } = await supabase
+        .from('transactions')
+        .delete()
+        .eq('user_id', userId)
+
+      if (deleteError) {
+        setError(deleteError.message)
+        return
+      }
+    }
+
+    setTransactions([])
+    setTransactionSearchTerm('')
+    setMessage('All transactions erased.')
+  }
+
   return (
     <main className="page">
       <header className="page-header">
@@ -735,6 +761,14 @@ export default function AnalyzerPage() {
           </select>
           <button type="button" className="secondary" onClick={() => setTransactionSearchTerm('')}>
             Clear
+          </button>
+          <button
+            type="button"
+            className="danger"
+            onClick={handleEraseAllTransactions}
+            disabled={transactions.length === 0}
+          >
+            Erase All
           </button>
         </div>
 

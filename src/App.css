@@ -127,6 +127,15 @@ button.secondary:hover {
   background: #cbd5e1;
 }
 
+button.danger {
+  background: #b42318;
+  color: #fff;
+}
+
+button.danger:hover {
+  background: #9f1a12;
+}
+
 .auth-links {
   margin-top: 1rem;
   display: flex;
