@@ -6,12 +6,23 @@ export type ParsedTransaction = {
 }
 
 const MAX_TRANSACTIONS = 1000
+const DEBUG = typeof window !== 'undefined' && (window as any).__DEBUG_PARSE__ === true
 
-const amountPattern = /\(?-?\$?\s*[\d,]+(?:\.\d{1,2})?\)?/
+const amountPattern = /\(?-?\$?\s*[\d,]+(?:\.\d{1,2})?\)?(?:\s*(?:cr|dr))?|\$?\s*[\d,]+(?:\.\d{1,2})?-\b/i
 const datePattern = /(\d{1,2}[\/-]\d{1,2}(?:[\/-]\d{2,4})?|\d{4}[\/-]\d{1,2}[\/-]\d{1,2}|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+\d{1,2}(?:,\s*\d{2,4})?)/i
 
+function debugLog(message: string, data?: unknown): void {
+  if (DEBUG) {
+    console.log(`[PARSE DEBUG] ${message}`, data ?? '')
+  }
+}
+
 function toNumber(raw: string): number | null {
-  const cleaned = raw.replace(/\$/g, '').replace(/,/g, '').trim()
+  const normalized = raw.trim()
+  const hasTrailingMinus = /-\s*$/.test(normalized)
+  const hasDr = /\bdr\b/i.test(normalized)
+  const hasCr = /\bcr\b/i.test(normalized)
+  const cleaned = normalized.replace(/\$/g, '').replace(/,/g, '').replace(/\b(?:cr|dr)\b/gi, '').trim()
   if (!cleaned) {
     return null
   }
@@ -22,7 +33,9 @@ function toNumber(raw: string): number | null {
     return null
   }
 
-  return isNegative ? -numeric : numeric
+  if (isNegative || hasTrailingMinus || hasDr) return -Math.abs(numeric)
+  if (hasCr) return Math.abs(numeric)
+  return numeric
 }
 
 function splitCsvRow(row: string, delimiter: string): string[] {
@@ -216,7 +229,7 @@ function parseStatementLikeLines(text: string): ParsedTransaction[] {
     const dateMatch = line.match(datePattern)
     if (!dateMatch) continue
 
-    const amounts = Array.from(line.matchAll(/\(?-?\$?\s*[\d,]+(?:\.\d{2})\)?/g))
+    const amounts = Array.from(line.matchAll(new RegExp(amountPattern, 'gi')))
     const amountToken = amounts.length > 0 ? amounts[amounts.length - 1][0] : null
     if (!amountToken) continue
 
@@ -237,6 +250,45 @@ function parseStatementLikeLines(text: string): ParsedTransaction[] {
       description,
       amount,
     })
+  }
+
+  return records
+}
+
+function parseAdjacentLinePairs(text: string): ParsedTransaction[] {
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+
+  const records: ParsedTransaction[] = []
+
+  for (let i = 0; i < lines.length - 1 && records.length < MAX_TRANSACTIONS; i += 1) {
+    const combined = `${lines[i]} ${lines[i + 1]}`
+    const dateMatch = combined.match(datePattern)
+    const amountMatches = Array.from(combined.matchAll(new RegExp(amountPattern, 'gi')))
+    const amountToken = amountMatches.length > 0 ? amountMatches[amountMatches.length - 1][0] : null
+
+    if (!dateMatch || !amountToken) continue
+
+    const amount = toNumber(amountToken)
+    if (amount === null) continue
+
+    const dateToken = dateMatch[0]
+    const description = combined
+      .replace(dateToken, ' ')
+      .replace(amountToken, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+
+    if (!description || description.length < 2) continue
+
+    records.push({
+      date: normalizeDate(dateToken),
+      description,
+      amount,
+    })
+    i += 1
   }
 
   return records
@@ -286,6 +338,45 @@ function parseLoosePdfText(text: string): ParsedTransaction[] {
     })
   }
 
+  return records
+}
+
+function parseBruteForce(text: string): ParsedTransaction[] {
+  debugLog('Attempting brute force parsing...')
+  const records: ParsedTransaction[] = []
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean)
+  
+  // Look for ANY pattern of: date-like thing, text, number-like thing
+  const anyDatePattern = /(\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4}|\d{4}[\/-]\d{1,2}[\/-]\d{1,2})/
+  const anyAmountPattern = /[\d,]{2,}\.\d{1,2}|[\d,]+(?=\s|$)/
+  
+  for (const line of lines) {
+    if (records.length >= MAX_TRANSACTIONS) break
+    
+    const dateMatch = line.match(anyDatePattern)
+    const amountMatch = line.match(anyAmountPattern)
+    
+    if (!dateMatch || !amountMatch) continue
+    
+    const amount = toNumber(amountMatch[0])
+    if (amount === null) continue
+    
+    const description = line
+      .replace(dateMatch[0], '')
+      .replace(amountMatch[0], '')
+      .replace(/\s+/g, ' ')
+      .trim()
+    
+    if (description.length < 2) continue
+    
+    records.push({
+      date: normalizeDate(dateMatch[0]),
+      description,
+      amount,
+    })
+  }
+  
+  debugLog(`Brute force found ${records.length} transactions`)
   return records
 }
 
@@ -377,6 +468,7 @@ async function extractPdfTextWithOcr(buffer: ArrayBuffer): Promise<string> {
 
 async function parsePdf(buffer: ArrayBuffer): Promise<ParsedTransaction[]> {
   let fullText = ''
+  debugLog('Starting PDF parsing...')
 
   try {
     const pdfjsLib = await import('pdfjs-dist')
@@ -387,16 +479,18 @@ async function parsePdf(buffer: ArrayBuffer): Promise<ParsedTransaction[]> {
       ).href
     }
     fullText = await extractPdfText(pdfjsLib, buffer)
-  } catch {
-    // Continue to secondary fallbacks below.
+    debugLog('PDF text extraction (ESM) succeeded', { length: fullText.length })
+  } catch (e) {
+    debugLog('PDF text extraction (ESM) failed', { error: String(e) })
   }
 
   if (!fullText.trim()) {
     try {
       const pdfjsLib = await import('pdfjs-dist')
       fullText = await extractPdfText(pdfjsLib, buffer, true)
-    } catch {
-      // Continue to legacy fallback.
+      debugLog('PDF text extraction (no worker) succeeded', { length: fullText.length })
+    } catch (e) {
+      debugLog('PDF text extraction (no worker) failed', { error: String(e) })
     }
   }
 
@@ -405,54 +499,153 @@ async function parsePdf(buffer: ArrayBuffer): Promise<ParsedTransaction[]> {
       // Fallback for PDFs/environments that fail on the default bundle/worker path.
       const legacyPdfJsLib = await import('pdfjs-dist/legacy/build/pdf.mjs')
       fullText = await extractPdfText(legacyPdfJsLib, buffer, true)
-    } catch {
-      // Continue to OCR fallback.
+      debugLog('PDF text extraction (legacy) succeeded', { length: fullText.length })
+    } catch (e) {
+      debugLog('PDF text extraction (legacy) failed', { error: String(e) })
     }
   }
 
   if (!fullText.trim()) {
+    debugLog('Attempting OCR fallback...')
     fullText = await extractPdfTextWithOcr(buffer)
+    debugLog('OCR extraction completed', { length: fullText.length })
   }
 
-  if (!fullText.trim()) return []
+  if (!fullText.trim()) {
+    debugLog('No text extracted from PDF')
+    return []
+  }
+
+  debugLog('PDF text extracted, attempting parsers...', { textLength: fullText.length, firstChars: fullText.slice(0, 100) })
 
   const csvCandidate = parseCsv(fullText)
-  if (csvCandidate.length > 0) return csvCandidate
+  if (csvCandidate.length > 0) {
+    debugLog('✓ CSV parser succeeded', { count: csvCandidate.length })
+    return csvCandidate
+  }
+  debugLog('✗ CSV parser failed')
 
   const lineCandidate = parseText(fullText)
-  if (lineCandidate.length > 0) return lineCandidate
+  if (lineCandidate.length > 0) {
+    debugLog('✓ Line parser succeeded', { count: lineCandidate.length })
+    return lineCandidate
+  }
+  debugLog('✗ Line parser failed')
 
   const statementCandidate = parseStatementLikeLines(fullText)
-  if (statementCandidate.length > 0) return statementCandidate
+  if (statementCandidate.length > 0) {
+    debugLog('✓ Statement parser succeeded', { count: statementCandidate.length })
+    return statementCandidate
+  }
+  debugLog('✗ Statement parser failed')
 
-  return parseLoosePdfText(fullText)
+  const adjacentLineCandidate = parseAdjacentLinePairs(fullText)
+  if (adjacentLineCandidate.length > 0) {
+    debugLog('✓ Adjacent lines parser succeeded', { count: adjacentLineCandidate.length })
+    return adjacentLineCandidate
+  }
+  debugLog('✗ Adjacent lines parser failed')
+
+  const looseCandidate = parseLoosePdfText(fullText)
+  if (looseCandidate.length > 0) {
+    debugLog('✓ Loose PDF parser succeeded', { count: looseCandidate.length })
+    return looseCandidate
+  }
+  debugLog('✗ Loose PDF parser failed')
+
+  const bruteCandidate = parseBruteForce(fullText)
+  if (bruteCandidate.length > 0) {
+    debugLog('✓ Brute force parser succeeded', { count: bruteCandidate.length })
+    return bruteCandidate
+  }
+  debugLog('✗ Brute force parser failed - all parsers exhausted')
+
+  return []
 }
 
 export async function extractTransactionsFromFile(file: File): Promise<ParsedTransaction[]> {
   const lowerName = file.name.toLowerCase()
+  debugLog(`Processing file: ${file.name} (${file.size} bytes)`)
 
   if (lowerName.endsWith('.xlsx')) {
-    return parseXlsx(file)
-  }
-
-  if (lowerName.endsWith('.pdf')) {
+    debugLog('File type: XLSX')
     try {
-      const buffer = await file.arrayBuffer()
-      return await parsePdf(buffer)
-    } catch {
+      const result = await parseXlsx(file)
+      debugLog(`XLSX parsing resulted in ${result.length} transactions`)
+      return result
+    } catch (e) {
+      debugLog('XLSX parsing error', { error: String(e) })
       return []
     }
   }
 
-  const text = await file.text()
-
-  if (lowerName.endsWith('.csv') || lowerName.endsWith('.tsv')) {
-    return parseCsv(text)
+  if (lowerName.endsWith('.pdf')) {
+    debugLog('File type: PDF')
+    try {
+      const buffer = await file.arrayBuffer()
+      const result = await parsePdf(buffer)
+      debugLog(`PDF parsing resulted in ${result.length} transactions`)
+      return result
+    } catch (e) {
+      debugLog('PDF parsing error', { error: String(e) })
+      return []
+    }
   }
 
-  const csvCandidate = parseCsv(text)
-  if (csvCandidate.length > 0) return csvCandidate
-  return parseText(text)
+  try {
+    const text = await file.text()
+    debugLog(`File text extracted (${text.length} chars)`)
+
+    if (lowerName.endsWith('.csv') || lowerName.endsWith('.tsv')) {
+      debugLog('File type: CSV/TSV')
+      const result = parseCsv(text)
+      debugLog(`CSV parsing resulted in ${result.length} transactions`)
+      return result
+    }
+
+    debugLog('File type: Text (trying parsers)')
+    const csvCandidate = parseCsv(text)
+    if (csvCandidate.length > 0) {
+      debugLog(`CSV parser found ${csvCandidate.length} transactions`)
+      return csvCandidate
+    }
+
+    const textCandidate = parseText(text)
+    if (textCandidate.length > 0) {
+      debugLog(`Text parser found ${textCandidate.length} transactions`)
+      return textCandidate
+    }
+
+    const statementCandidate = parseStatementLikeLines(text)
+    if (statementCandidate.length > 0) {
+      debugLog(`Statement parser found ${statementCandidate.length} transactions`)
+      return statementCandidate
+    }
+
+    const adjacentCandidate = parseAdjacentLinePairs(text)
+    if (adjacentCandidate.length > 0) {
+      debugLog(`Adjacent parser found ${adjacentCandidate.length} transactions`)
+      return adjacentCandidate
+    }
+
+    const looseCandidate = parseLoosePdfText(text)
+    if (looseCandidate.length > 0) {
+      debugLog(`Loose parser found ${looseCandidate.length} transactions`)
+      return looseCandidate
+    }
+
+    const bruteCandidate = parseBruteForce(text)
+    if (bruteCandidate.length > 0) {
+      debugLog(`Brute force parser found ${bruteCandidate.length} transactions`)
+      return bruteCandidate
+    }
+
+    debugLog('All parsers failed - no transactions found')
+    return []
+  } catch (e) {
+    debugLog('File text extraction error', { error: String(e) })
+    return []
+  }
 }
 
 export function suggestCategory(description: string, amount: number): string {

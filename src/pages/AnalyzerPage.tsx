@@ -316,11 +316,17 @@ export default function AnalyzerPage() {
     setIsExtracting(true)
 
     try {
+      // Enable debug mode for troubleshooting (check browser console)
+      ;(window as any).__DEBUG_PARSE__ = true
+      
       const parsed = await extractTransactionsFromFile(selectedFile)
+      
       if (parsed.length === 0) {
-        setError('No transactions were found. Try exporting your statement as CSV, or check that the file contains readable transaction data.')
+        const debugMsg = `No transactions were found. The parser tried CSV, text, statement, adjacent line, loose PDF, and brute force methods. Check the browser console (F12 → Console tab) for "[PARSE DEBUG]" logs to see which parsers were attempted. File: ${selectedFile.name} (${(selectedFile.size / 1024).toFixed(1)}KB)`
+        setError(debugMsg)
         setTransactions([])
         setIsExtracting(false)
+        console.warn('Parsing failed - check console logs above for details')
         return
       }
 
