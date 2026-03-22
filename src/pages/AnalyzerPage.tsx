@@ -78,6 +78,14 @@ export default function AnalyzerPage() {
   const [message, setMessage] = useState('')
   const [isExtracting, setIsExtracting] = useState(false)
   const [isLoadingSavedData, setIsLoadingSavedData] = useState(false)
+  const [categoryChangeModal, setCategoryChangeModal] = useState<{
+    transactionId: string
+    payee: string
+    oldCategory: string
+    newCategory: string
+    matchingCount: number
+  } | null>(null)
+  const [applyingCategoryChange, setApplyingCategoryChange] = useState(false)
 
   const isMissingPayeeRulesTableError = (value: unknown): boolean => {
     if (!value || typeof value !== 'object') return false
@@ -380,22 +388,7 @@ export default function AnalyzerPage() {
     setNewCategory('')
   }
 
-  const handleCategoryChange = async (id: string, category: string) => {
-    setTransactions((prev) => prev.map((tx) => (tx.id === id ? { ...tx, category } : tx)))
-
-    if (isPersistenceReady && supabase && userId) {
-      const { error: updateError } = await supabase
-        .from('transactions')
-        .update({ category_name: category })
-        .eq('id', id)
-        .eq('user_id', userId)
-
-      if (updateError) {
-        setError(updateError.message)
-      }
-    }
-  }
-
+  
   const handleSavePayeeRule = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     setError('')
@@ -499,6 +492,94 @@ export default function AnalyzerPage() {
       return
     }
     await supabase.auth.signOut()
+  }
+
+  const handleCategoryChange = (transactionId: string, newCategory: string) => {
+    const transaction = transactions.find((tx) => tx.id === transactionId)
+    if (!transaction) return
+
+    const payee = transaction.description
+    const matchingCount = transactions.filter((tx) =>
+      tx.description.toLowerCase() === payee.toLowerCase() && tx.category !== newCategory,
+    ).length
+
+    setCategoryChangeModal({
+      transactionId,
+      payee,
+      oldCategory: transaction.category,
+      newCategory,
+      matchingCount,
+    })
+  }
+
+  const handleConfirmCategoryChange = async (applyToAll: boolean) => {
+    if (!categoryChangeModal) return
+
+    setApplyingCategoryChange(true)
+    const { transactionId, payee, newCategory } = categoryChangeModal
+
+    try {
+      if (applyToAll) {
+        // Update all transactions with matching payee
+        const matchingIds = transactions
+          .filter((tx) => tx.description.toLowerCase() === payee.toLowerCase())
+          .map((tx) => tx.id)
+
+        if (isPersistenceReady && supabase && userId) {
+          // Update in Supabase
+          const { error: updateError } = await supabase
+            .from('transactions')
+            .update({ category_name: newCategory })
+            .in('id', matchingIds)
+            .eq('user_id', userId)
+
+          if (updateError) {
+            setError(updateError.message)
+            setApplyingCategoryChange(false)
+            return
+          }
+        }
+
+        // Update in local state
+        setTransactions((prev) =>
+          prev.map((tx) =>
+            matchingIds.includes(tx.id) ? { ...tx, category: newCategory } : tx,
+          ),
+        )
+        setMessage(`Updated ${matchingIds.length} transaction${matchingIds.length === 1 ? '' : 's'} for "${payee}"`)
+      } else {
+        // Update only this transaction
+        if (isPersistenceReady && supabase && userId) {
+          const { error: updateError } = await supabase
+            .from('transactions')
+            .update({ category_name: newCategory })
+            .eq('id', transactionId)
+            .eq('user_id', userId)
+
+          if (updateError) {
+            setError(updateError.message)
+            setApplyingCategoryChange(false)
+            return
+          }
+        }
+
+        // Update in local state
+        setTransactions((prev) =>
+          prev.map((tx) => (tx.id === transactionId ? { ...tx, category: newCategory } : tx)),
+        )
+        setMessage('Transaction category updated')
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Unknown error'
+      setError(errorMsg)
+    } finally {
+      setCategoryChangeModal(null)
+      setApplyingCategoryChange(false)
+    }
+  }
+
+  const handleCancelCategoryChange = () => {
+    setCategoryChangeModal(null)
   }
 
   return (
@@ -722,6 +803,53 @@ export default function AnalyzerPage() {
           </>
         ) : null}
       </section>
+
+      {categoryChangeModal && (
+        <div className="modal-overlay" onClick={handleCancelCategoryChange}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <h3>Change Category</h3>
+            <p>
+              Change category for "<strong>{categoryChangeModal.payee}</strong>" from{' '}
+              <strong>{categoryChangeModal.oldCategory}</strong> to{' '}
+              <strong>{categoryChangeModal.newCategory}</strong>?
+            </p>
+            {categoryChangeModal.matchingCount > 1 && (
+              <p className="muted">
+                There {categoryChangeModal.matchingCount === 1 ? 'is' : 'are'}{' '}
+                <strong>{categoryChangeModal.matchingCount}</strong> transaction
+                {categoryChangeModal.matchingCount === 1 ? '' : 's'} with this payee.
+              </p>
+            )}
+            <div className="modal-buttons">
+              <button
+                type="button"
+                className="secondary"
+                onClick={handleCancelCategoryChange}
+                disabled={applyingCategoryChange}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => handleConfirmCategoryChange(false)}
+                disabled={applyingCategoryChange}
+              >
+                {applyingCategoryChange ? 'Updating...' : 'Change This Only'}
+              </button>
+              {categoryChangeModal.matchingCount > 1 && (
+                <button
+                  type="button"
+                  className="primary"
+                  onClick={() => handleConfirmCategoryChange(true)}
+                  disabled={applyingCategoryChange}
+                >
+                  {applyingCategoryChange ? 'Updating...' : `Change All ${categoryChangeModal.matchingCount}`}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   )
 }
