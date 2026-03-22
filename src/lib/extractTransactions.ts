@@ -279,6 +279,45 @@ async function extractPdfText(
   return fullText
 }
 
+async function extractPdfTextWithOcr(buffer: ArrayBuffer): Promise<string> {
+  if (typeof document === 'undefined') return ''
+
+  try {
+    const [pdfjsLib, tesseract] = await Promise.all([
+      import('pdfjs-dist/legacy/build/pdf.mjs'),
+      import('tesseract.js'),
+    ])
+
+    const pdf = await pdfjsLib.getDocument({ data: buffer, disableWorker: true } as any).promise
+    const pageLimit = Math.min(pdf.numPages, 8)
+    let fullText = ''
+
+    for (let i = 1; i <= pageLimit; i += 1) {
+      try {
+        const page = await pdf.getPage(i)
+        const viewport = page.getViewport({ scale: 2 })
+        const canvas = document.createElement('canvas')
+        const ctx = canvas.getContext('2d')
+        if (!ctx) continue
+
+        canvas.width = Math.ceil(viewport.width)
+        canvas.height = Math.ceil(viewport.height)
+
+        await page.render({ canvas: canvas as any, canvasContext: ctx, viewport } as any).promise
+        const result = await tesseract.recognize(canvas, 'eng')
+        const pageText = result?.data?.text ?? ''
+        fullText += `${pageText}\n`
+      } catch {
+        // Continue OCR for remaining pages even if one page fails.
+      }
+    }
+
+    return fullText
+  } catch {
+    return ''
+  }
+}
+
 async function parsePdf(buffer: ArrayBuffer): Promise<ParsedTransaction[]> {
   let fullText = ''
 
@@ -310,10 +349,15 @@ async function parsePdf(buffer: ArrayBuffer): Promise<ParsedTransaction[]> {
       const legacyPdfJsLib = await import('pdfjs-dist/legacy/build/pdf.mjs')
       fullText = await extractPdfText(legacyPdfJsLib, buffer, true)
     } catch {
-      // If all parser paths fail, return no rows instead of throwing.
-      return []
+      // Continue to OCR fallback.
     }
   }
+
+  if (!fullText.trim()) {
+    fullText = await extractPdfTextWithOcr(buffer)
+  }
+
+  if (!fullText.trim()) return []
 
   const csvCandidate = parseCsv(fullText)
   if (csvCandidate.length > 0) return csvCandidate
