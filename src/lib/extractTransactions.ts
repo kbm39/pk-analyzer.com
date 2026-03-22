@@ -107,11 +107,13 @@ function parseCsv(text: string): ParsedTransaction[] {
   const headers = splitCsvRow(lines[0].toLowerCase(), delimiter)
 
   const dateIndex = getColumnIndex(headers, ['date', 'posted'])
-  const descriptionIndex = getColumnIndex(headers, ['description', 'merchant', 'details', 'name'])
+  const descriptionIndex = getColumnIndex(headers, ['description', 'merchant', 'details', 'payee', 'name'])
   const amountIndex = getColumnIndex(headers, ['amount', 'value'])
   const debitIndex = getColumnIndex(headers, ['debit', 'withdrawal'])
   const creditIndex = getColumnIndex(headers, ['credit', 'deposit'])
-  const categoryIndex = getColumnIndex(headers, ['category', 'type', 'memo'])
+  // Prioritise 'categor' substring so "Category", "Categories", "Categorization" all match.
+  // Avoid 'type' and 'memo' — both can false-match unrelated columns (e.g. "Transaction Type").
+  const categoryIndex = getColumnIndex(headers, ['categor', 'tag', 'label', 'classification'])
 
   const records: ParsedTransaction[] = []
 
