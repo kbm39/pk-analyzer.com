@@ -290,9 +290,27 @@ async function parsePdf(buffer: ArrayBuffer): Promise<ParsedTransaction[]> {
     }
     fullText = await extractPdfText(pdfjsLib, buffer)
   } catch {
-    // Fallback for PDFs/environments that fail on the default bundle/worker path.
-    const legacyPdfJsLib = await import('pdfjs-dist/legacy/build/pdf.mjs')
-    fullText = await extractPdfText(legacyPdfJsLib, buffer, true)
+    // Continue to secondary fallbacks below.
+  }
+
+  if (!fullText.trim()) {
+    try {
+      const pdfjsLib = await import('pdfjs-dist')
+      fullText = await extractPdfText(pdfjsLib, buffer, true)
+    } catch {
+      // Continue to legacy fallback.
+    }
+  }
+
+  if (!fullText.trim()) {
+    try {
+      // Fallback for PDFs/environments that fail on the default bundle/worker path.
+      const legacyPdfJsLib = await import('pdfjs-dist/legacy/build/pdf.mjs')
+      fullText = await extractPdfText(legacyPdfJsLib, buffer, true)
+    } catch {
+      // If all parser paths fail, return no rows instead of throwing.
+      return []
+    }
   }
 
   const csvCandidate = parseCsv(fullText)
