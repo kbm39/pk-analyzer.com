@@ -194,24 +194,6 @@ export default function AnalyzerPage() {
     void loadSavedData()
   }, [])
 
-  const totalIncome = useMemo(
-    () => transactions.filter((tx) => tx.amount > 0).reduce((sum, tx) => sum + tx.amount, 0),
-    [transactions],
-  )
-
-  const totalExpenses = useMemo(
-    () => transactions.filter((tx) => tx.amount < 0).reduce((sum, tx) => sum + tx.amount, 0),
-    [transactions],
-  )
-
-  const byCategory = useMemo(() => {
-    const map = new Map<string, number>()
-    for (const tx of transactions) {
-      map.set(tx.category, (map.get(tx.category) ?? 0) + tx.amount)
-    }
-    return [...map.entries()].sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))
-  }, [transactions])
-
   const displayedTransactions = useMemo(() => {
     const term = transactionSearchTerm.trim().toLowerCase()
     if (!term) {
@@ -258,6 +240,29 @@ export default function AnalyzerPage() {
       })
       .map((entry) => entry.tx)
   }, [transactionSearchMode, transactionSearchTerm, transactions])
+
+  const summarySource = useMemo(
+    () => (transactionSearchMode === 'filter' ? displayedTransactions : transactions),
+    [displayedTransactions, transactionSearchMode, transactions],
+  )
+
+  const totalIncome = useMemo(
+    () => summarySource.filter((tx) => tx.amount > 0).reduce((sum, tx) => sum + tx.amount, 0),
+    [summarySource],
+  )
+
+  const totalExpenses = useMemo(
+    () => summarySource.filter((tx) => tx.amount < 0).reduce((sum, tx) => sum + tx.amount, 0),
+    [summarySource],
+  )
+
+  const byCategory = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const tx of summarySource) {
+      map.set(tx.category, (map.get(tx.category) ?? 0) + tx.amount)
+    }
+    return [...map.entries()].sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))
+  }, [summarySource])
 
   const handleExtract = async () => {
     if (!selectedFile) {
