@@ -61,6 +61,22 @@ function sortTransactionsDescending(items: Transaction[]): Transaction[] {
   return [...items].sort((a, b) => b.date.localeCompare(a.date))
 }
 
+function mergeCategories(current: string[], incoming: string[]): string[] {
+  const seen = new Set(current.map((value) => value.toLowerCase()))
+  const next = [...current]
+
+  for (const value of incoming) {
+    const trimmed = value.trim()
+    if (!trimmed) continue
+    const key = trimmed.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    next.push(trimmed)
+  }
+
+  return next
+}
+
 export default function AnalyzerPage() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [transactions, setTransactions] = useState<Transaction[]>([])
@@ -313,6 +329,36 @@ export default function AnalyzerPage() {
           category,
         }
       })
+
+      const importedCategories = Array.from(
+        new Set(
+          next
+            .map((tx) => tx.category.trim())
+            .filter(Boolean),
+        ),
+      )
+
+      const missingImportedCategories = importedCategories.filter(
+        (candidate) => !categories.some((existing) => existing.toLowerCase() === candidate.toLowerCase()),
+      )
+
+      if (missingImportedCategories.length > 0) {
+        setCategories((prev) => mergeCategories(prev, missingImportedCategories))
+
+        if (isPersistenceReady && supabase && userId) {
+          const { error: categoryInsertError } = await supabase.from('categories').insert(
+            missingImportedCategories.map((name) => ({
+              user_id: userId,
+              name,
+              is_default: false,
+            })),
+          )
+
+          if (categoryInsertError && categoryInsertError.code !== '23505') {
+            setError(categoryInsertError.message)
+          }
+        }
+      }
 
       if (isPersistenceReady && supabase && userId) {
         const payload = next.map((tx) => ({
