@@ -330,8 +330,12 @@ export async function extractTransactionsFromFile(file: File): Promise<ParsedTra
   }
 
   if (lowerName.endsWith('.pdf')) {
-    const buffer = await file.arrayBuffer()
-    return parsePdf(buffer)
+    try {
+      const buffer = await file.arrayBuffer()
+      return await parsePdf(buffer)
+    } catch {
+      return []
+    }
   }
 
   const text = await file.text()

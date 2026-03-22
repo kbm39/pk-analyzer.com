@@ -305,7 +305,7 @@ export default function AnalyzerPage() {
     try {
       const parsed = await extractTransactionsFromFile(selectedFile)
       if (parsed.length === 0) {
-        setError('No transactions were found. Try a CSV export with date/description/amount columns.')
+        setError('No transactions were found. Try exporting your statement as CSV, or check that the file contains readable transaction data.')
         setTransactions([])
         setIsExtracting(false)
         return
@@ -400,7 +400,7 @@ export default function AnalyzerPage() {
         setMessage('Transactions extracted in local mode. Configure Supabase tables to persist data.')
       }
     } catch {
-      setError('Could not process this file. Please upload a CSV/TSV or text statement export.')
+      setError('Could not process this file. Supported formats: CSV, TSV, Excel (.xlsx), and text-layer PDFs.')
       setTransactions([])
     } finally {
       setIsExtracting(false)
