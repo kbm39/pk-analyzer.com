@@ -183,6 +183,53 @@ function parseText(text: string): ParsedTransaction[] {
   return records
 }
 
+function parseLoosePdfText(text: string): ParsedTransaction[] {
+  const records: ParsedTransaction[] = []
+  const datePattern = /\b(\d{1,2}[\/-]\d{1,2}(?:[\/-]\d{2,4})?)\b/g
+
+  const matches = Array.from(text.matchAll(datePattern))
+  if (matches.length === 0) {
+    return []
+  }
+
+  for (let i = 0; i < matches.length && records.length < MAX_TRANSACTIONS; i += 1) {
+    const match = matches[i]
+    const dateText = match[1]
+    const start = match.index ?? 0
+    const end = i + 1 < matches.length ? (matches[i + 1].index ?? text.length) : Math.min(start + 240, text.length)
+    const chunk = text.slice(start, end)
+
+    const amounts = Array.from(chunk.matchAll(/\(?-?\$?\s*[\d,]+(?:\.\d{1,2})?\)?/g))
+    const bestAmount = amounts.length > 0 ? amounts[amounts.length - 1][0] : null
+    if (!bestAmount) {
+      continue
+    }
+
+    const amount = toNumber(bestAmount)
+    if (amount === null) {
+      continue
+    }
+
+    const description = chunk
+      .replace(dateText, ' ')
+      .replace(bestAmount, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+
+    if (!description || description.length < 2) {
+      continue
+    }
+
+    records.push({
+      date: normalizeDate(dateText),
+      description,
+      amount,
+    })
+  }
+
+  return records
+}
+
 async function parseXlsx(file: File): Promise<ParsedTransaction[]> {
   const readXlsxFile = (await import('read-excel-file/browser')).default
   const rows = await readXlsxFile(file)
@@ -250,7 +297,11 @@ async function parsePdf(buffer: ArrayBuffer): Promise<ParsedTransaction[]> {
 
   const csvCandidate = parseCsv(fullText)
   if (csvCandidate.length > 0) return csvCandidate
-  return parseText(fullText)
+
+  const lineCandidate = parseText(fullText)
+  if (lineCandidate.length > 0) return lineCandidate
+
+  return parseLoosePdfText(fullText)
 }
 
 export async function extractTransactionsFromFile(file: File): Promise<ParsedTransaction[]> {
