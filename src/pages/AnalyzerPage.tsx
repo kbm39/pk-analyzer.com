@@ -98,6 +98,7 @@ export default function AnalyzerPage() {
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
   const [isExtracting, setIsExtracting] = useState(false)
+  const [isHardSaving, setIsHardSaving] = useState(false)
   const [isLoadingSavedData, setIsLoadingSavedData] = useState(false)
   const [categoryChangeModal, setCategoryChangeModal] = useState<{
     transactionId: string
@@ -687,6 +688,97 @@ export default function AnalyzerPage() {
     URL.revokeObjectURL(url)
   }
 
+  const handleHardSaveToCloud = async () => {
+    setError('')
+    setMessage('')
+
+    if (transactions.length === 0) {
+      setError('No transactions to hard save yet.')
+      return
+    }
+
+    if (!isSupabaseConfigured || !supabase || !userId) {
+      setError('Hard save needs an active Supabase session. Sign in first.')
+      return
+    }
+
+    setIsHardSaving(true)
+
+    try {
+      const signature = (row: {
+        tx_date: string
+        description: string
+        amount: number
+        category_name: string
+      }): string => {
+        return [
+          row.tx_date,
+          row.description.trim().toLowerCase(),
+          row.amount.toFixed(2),
+          row.category_name.trim().toLowerCase(),
+        ].join('|')
+      }
+
+      const existing = new Set<string>()
+      const pageSize = 1000
+
+      for (let from = 0; ; from += pageSize) {
+        const to = from + pageSize - 1
+        const { data, error: readError } = await supabase
+          .from('transactions')
+          .select('tx_date, description, amount, category_name')
+          .eq('user_id', userId)
+          .range(from, to)
+
+        if (readError) {
+          setError(readError.message)
+          return
+        }
+
+        const rows = ((data as Array<{
+          tx_date: string
+          description: string
+          amount: number
+          category_name: string
+        }> | null) ?? [])
+
+        for (const row of rows) {
+          existing.add(signature(row))
+        }
+
+        if (rows.length < pageSize) break
+      }
+
+      const payload = transactions
+        .map((tx) => ({
+          user_id: userId,
+          tx_date: tx.date,
+          description: tx.description,
+          amount: tx.amount,
+          category_name: tx.category,
+          source_file: selectedFile?.name ?? 'manual-hard-save',
+        }))
+        .filter((row) => !existing.has(signature(row)))
+
+      if (payload.length === 0) {
+        setMessage('Hard save complete. Everything is already backed up offsite.')
+        return
+      }
+
+      const { error: insertError } = await supabase.from('transactions').insert(payload)
+      if (insertError) {
+        setError(insertError.message)
+        return
+      }
+
+      setMessage(
+        `Hard save complete. ${payload.length} transaction${payload.length === 1 ? '' : 's'} saved to your offsite server.`,
+      )
+    } finally {
+      setIsHardSaving(false)
+    }
+  }
+
   const handleEraseAllTransactions = async () => {
     if (transactions.length === 0) return
 
@@ -747,6 +839,14 @@ export default function AnalyzerPage() {
           />
           <button type="button" onClick={handleExtract} disabled={isExtracting}>
             {isExtracting ? 'Extracting...' : 'Extract Transactions'}
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={handleHardSaveToCloud}
+            disabled={isHardSaving || transactions.length === 0}
+          >
+            {isHardSaving ? 'Hard Saving...' : 'Hard Save to Cloud'}
           </button>
         </div>
 
