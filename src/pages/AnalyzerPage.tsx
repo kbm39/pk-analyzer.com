@@ -65,6 +65,10 @@ function escCsv(s: string): string {
   return `"${s.replace(/"/g, '""')}"`
 }
 
+function slugifyFilePart(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'export'
+}
+
 function mergeCategories(current: string[], incoming: string[]): string[] {
   const seen = new Set(current.map((value) => value.toLowerCase()))
   const next = [...current]
@@ -91,6 +95,7 @@ export default function AnalyzerPage() {
   const [payeeRuleCategory, setPayeeRuleCategory] = useState('')
   const [transactionSearchTerm, setTransactionSearchTerm] = useState('')
   const [transactionSearchMode, setTransactionSearchMode] = useState<'pin' | 'filter'>('pin')
+  const [selectedExportCategories, setSelectedExportCategories] = useState<string[]>([])
   const [isSavingPayeeRule, setIsSavingPayeeRule] = useState(false)
   const [userId, setUserId] = useState<string | null>(null)
   const [isPersistenceReady, setIsPersistenceReady] = useState(false)
@@ -293,6 +298,12 @@ export default function AnalyzerPage() {
     }
     return [...map.entries()].sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))
   }, [summarySource])
+
+  const exportableCategories = useMemo(() => byCategory.map(([category]) => category), [byCategory])
+
+  useEffect(() => {
+    setSelectedExportCategories((prev) => prev.filter((category) => exportableCategories.includes(category)))
+  }, [exportableCategories])
 
   const handleExtract = async () => {
     if (!selectedFile) {
@@ -634,12 +645,11 @@ export default function AnalyzerPage() {
     setCategoryChangeModal(null)
   }
 
-  const handleExportAll = () => {
-    if (summarySource.length === 0) return
-
+  const buildGroupedExportRows = (categoriesToExport: string[]) => {
     const grouped = new Map<string, Transaction[]>()
-    for (const [cat] of byCategory) grouped.set(cat, [])
+    for (const category of categoriesToExport) grouped.set(category, [])
     for (const tx of summarySource) {
+      if (!grouped.has(tx.category)) continue
       const arr = grouped.get(tx.category) ?? []
       arr.push(tx)
       grouped.set(tx.category, arr)
@@ -656,6 +666,14 @@ export default function AnalyzerPage() {
       rows.push(`SUBTOTAL – ${cat},,${subtotal.toFixed(2)},`)
       rows.push('')
     }
+
+    return rows
+  }
+
+  const handleExportAll = () => {
+    if (summarySource.length === 0) return
+
+    const rows = buildGroupedExportRows(exportableCategories)
 
     const blob = new Blob([rows.join('\n')], { type: 'text/csv' })
     const url = URL.createObjectURL(blob)
@@ -684,6 +702,26 @@ export default function AnalyzerPage() {
     const a = document.createElement('a')
     a.href = url
     a.download = `${category.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const handleToggleExportCategory = (category: string) => {
+    setSelectedExportCategories((prev) =>
+      prev.includes(category) ? prev.filter((value) => value !== category) : [...prev, category],
+    )
+  }
+
+  const handleExportSelectedCategories = () => {
+    if (selectedExportCategories.length === 0) return
+
+    const rows = buildGroupedExportRows(selectedExportCategories)
+
+    const blob = new Blob([rows.join('\n')], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `transactions-${slugifyFilePart(selectedExportCategories.join('-'))}.csv`
     a.click()
     URL.revokeObjectURL(url)
   }
@@ -1085,6 +1123,14 @@ export default function AnalyzerPage() {
           </button>
           <button
             type="button"
+            className="secondary"
+            onClick={handleExportSelectedCategories}
+            disabled={selectedExportCategories.length === 0}
+          >
+            Export Selected
+          </button>
+          <button
+            type="button"
             className="danger"
             onClick={handleEraseAllTransactions}
             disabled={transactions.length === 0}
@@ -1145,11 +1191,41 @@ export default function AnalyzerPage() {
             </div>
 
             <div className="category-summary">
-              <h3>Category Totals</h3>
+              <div className="category-summary-header">
+                <div>
+                  <h3>Category Totals</h3>
+                  <p className="muted category-summary-note">Select one or more categories, then use Export Selected.</p>
+                </div>
+                <div className="category-summary-tools">
+                  <button
+                    type="button"
+                    className="secondary small-button"
+                    onClick={() => setSelectedExportCategories(exportableCategories)}
+                    disabled={exportableCategories.length === 0}
+                  >
+                    Select All
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary small-button"
+                    onClick={() => setSelectedExportCategories([])}
+                    disabled={selectedExportCategories.length === 0}
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
               <ul>
                 {byCategory.map(([category, amount]) => (
                   <li key={category}>
-                    <span>{category}</span>
+                    <label className="category-export-option">
+                      <input
+                        type="checkbox"
+                        checked={selectedExportCategories.includes(category)}
+                        onChange={() => handleToggleExportCategory(category)}
+                      />
+                      <span>{category}</span>
+                    </label>
                     <div className="category-row-actions">
                       <strong>{formatAmount(amount)}</strong>
                       <button
