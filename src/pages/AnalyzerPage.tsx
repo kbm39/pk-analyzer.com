@@ -692,8 +692,12 @@ export default function AnalyzerPage() {
     setError('')
     setMessage('')
 
-    if (transactions.length === 0) {
-      setError('No transactions to hard save yet.')
+    const categoryCandidates = Array.from(
+      new Set(categories.map((value) => value.trim()).filter(Boolean)),
+    )
+
+    if (transactions.length === 0 && categoryCandidates.length === 0 && payeeRules.length === 0) {
+      setError('No analyzer data to hard save yet.')
       return
     }
 
@@ -705,6 +709,100 @@ export default function AnalyzerPage() {
     setIsHardSaving(true)
 
     try {
+      // Sync categories first so referenced category names exist before rule/transaction writes.
+      const { data: existingCategoryRows, error: categoryReadError } = await supabase
+        .from('categories')
+        .select('name')
+        .eq('user_id', userId)
+
+      if (categoryReadError) {
+        setError(categoryReadError.message)
+        return
+      }
+
+      const existingCategoryNames = new Set(
+        (((existingCategoryRows as Array<{ name: string }> | null) ?? []).map((row) => row.name.toLowerCase())),
+      )
+
+      const categoriesToInsert = categoryCandidates
+        .filter((name) => !existingCategoryNames.has(name.toLowerCase()))
+        .map((name) => ({
+          user_id: userId,
+          name,
+          is_default: BASE_CATEGORIES.some((base) => base.toLowerCase() === name.toLowerCase()),
+        }))
+
+      if (categoriesToInsert.length > 0) {
+        const { error: categoryInsertError } = await supabase.from('categories').insert(categoriesToInsert)
+        if (categoryInsertError && categoryInsertError.code !== '23505') {
+          setError(categoryInsertError.message)
+          return
+        }
+      }
+
+      let insertedRules = 0
+      let updatedRules = 0
+
+      if (payeeRules.length > 0) {
+        const { data: existingRuleRows, error: ruleReadError } = await supabase
+          .from('payee_rules')
+          .select('id, payee_pattern, category_name')
+          .eq('user_id', userId)
+
+        if (ruleReadError && !isMissingPayeeRulesTableError(ruleReadError)) {
+          setError(ruleReadError.message)
+          return
+        }
+
+        if (!ruleReadError) {
+          const existingRuleMap = new Map(
+            (((existingRuleRows as Array<{ id: string; payee_pattern: string; category_name: string }> | null) ?? [])
+              .map((row) => [row.payee_pattern.toLowerCase(), row])),
+          )
+
+          const rulesToInsert = payeeRules
+            .filter((rule) => !existingRuleMap.has(rule.payee_pattern.toLowerCase()))
+            .map((rule) => ({
+              user_id: userId,
+              payee_pattern: rule.payee_pattern,
+              category_name: rule.category_name,
+            }))
+
+          const rulesToUpdate = payeeRules
+            .filter((rule) => {
+              const existingRule = existingRuleMap.get(rule.payee_pattern.toLowerCase())
+              return (
+                existingRule &&
+                existingRule.category_name.trim().toLowerCase() !== rule.category_name.trim().toLowerCase()
+              )
+            })
+
+          if (rulesToInsert.length > 0) {
+            const { error: ruleInsertError } = await supabase.from('payee_rules').insert(rulesToInsert)
+            if (ruleInsertError && !isMissingPayeeRulesTableError(ruleInsertError)) {
+              setError(ruleInsertError.message)
+              return
+            }
+            if (!ruleInsertError) insertedRules = rulesToInsert.length
+          }
+
+          for (const rule of rulesToUpdate) {
+            const { error: ruleUpdateError } = await supabase
+              .from('payee_rules')
+              .update({ category_name: rule.category_name })
+              .eq('user_id', userId)
+              .eq('payee_pattern', rule.payee_pattern)
+
+            if (ruleUpdateError && !isMissingPayeeRulesTableError(ruleUpdateError)) {
+              setError(ruleUpdateError.message)
+              return
+            }
+
+            if (!ruleUpdateError) updatedRules += 1
+          }
+        }
+      }
+
       const signature = (row: {
         tx_date: string
         description: string
@@ -761,7 +859,11 @@ export default function AnalyzerPage() {
         .filter((row) => !existing.has(signature(row)))
 
       if (payload.length === 0) {
-        setMessage('Hard save complete. Everything is already backed up offsite.')
+        const categoryLabel = `${categoriesToInsert.length} categor${categoriesToInsert.length === 1 ? 'y' : 'ies'}`
+        const ruleLabel = `${insertedRules + updatedRules} payee rule${insertedRules + updatedRules === 1 ? '' : 's'}`
+        setMessage(
+          `Hard save complete. No new transactions were needed; synced ${categoryLabel} and ${ruleLabel} to offsite backup.`,
+        )
         return
       }
 
@@ -771,9 +873,10 @@ export default function AnalyzerPage() {
         return
       }
 
-      setMessage(
-        `Hard save complete. ${payload.length} transaction${payload.length === 1 ? '' : 's'} saved to your offsite server.`,
-      )
+      const txLabel = `${payload.length} transaction${payload.length === 1 ? '' : 's'}`
+      const categoryLabel = `${categoriesToInsert.length} categor${categoriesToInsert.length === 1 ? 'y' : 'ies'}`
+      const ruleLabel = `${insertedRules + updatedRules} payee rule${insertedRules + updatedRules === 1 ? '' : 's'}`
+      setMessage(`Hard save complete. Synced ${txLabel}, ${categoryLabel}, and ${ruleLabel} to your offsite server.`)
     } finally {
       setIsHardSaving(false)
     }
