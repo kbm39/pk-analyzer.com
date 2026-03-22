@@ -61,6 +61,10 @@ function sortTransactionsDescending(items: Transaction[]): Transaction[] {
   return [...items].sort((a, b) => b.date.localeCompare(a.date))
 }
 
+function escCsv(s: string): string {
+  return `"${s.replace(/"/g, '""')}"`
+}
+
 function mergeCategories(current: string[], incoming: string[]): string[] {
   const seen = new Set(current.map((value) => value.toLowerCase()))
   const next = [...current]
@@ -628,6 +632,60 @@ export default function AnalyzerPage() {
     setCategoryChangeModal(null)
   }
 
+  const handleExportAll = () => {
+    if (summarySource.length === 0) return
+
+    const grouped = new Map<string, Transaction[]>()
+    for (const [cat] of byCategory) grouped.set(cat, [])
+    for (const tx of summarySource) {
+      const arr = grouped.get(tx.category) ?? []
+      arr.push(tx)
+      grouped.set(tx.category, arr)
+    }
+
+    const rows: string[] = ['Date,Description,Amount,Category']
+    for (const [cat, txs] of grouped) {
+      if (txs.length === 0) continue
+      const sorted = [...txs].sort((a, b) => b.date.localeCompare(a.date))
+      for (const tx of sorted) {
+        rows.push(`${tx.date},${escCsv(tx.description)},${tx.amount.toFixed(2)},${escCsv(cat)}`)
+      }
+      const subtotal = txs.reduce((s, t) => s + t.amount, 0)
+      rows.push(`SUBTOTAL – ${cat},,${subtotal.toFixed(2)},`)
+      rows.push('')
+    }
+
+    const blob = new Blob([rows.join('\n')], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'transactions-all.csv'
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const handleExportCategory = (category: string) => {
+    const txs = summarySource
+      .filter((tx) => tx.category === category)
+      .sort((a, b) => b.date.localeCompare(a.date))
+    if (txs.length === 0) return
+
+    const rows: string[] = ['Date,Description,Amount,Category']
+    for (const tx of txs) {
+      rows.push(`${tx.date},${escCsv(tx.description)},${tx.amount.toFixed(2)},${escCsv(category)}`)
+    }
+    const total = txs.reduce((s, t) => s + t.amount, 0)
+    rows.push(`TOTAL – ${category},,${total.toFixed(2)},`)
+
+    const blob = new Blob([rows.join('\n')], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${category.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
   const handleEraseAllTransactions = async () => {
     if (transactions.length === 0) return
 
@@ -810,6 +868,14 @@ export default function AnalyzerPage() {
           </button>
           <button
             type="button"
+            className="secondary"
+            onClick={handleExportAll}
+            disabled={summarySource.length === 0}
+          >
+            Export All
+          </button>
+          <button
+            type="button"
             className="danger"
             onClick={handleEraseAllTransactions}
             disabled={transactions.length === 0}
@@ -875,7 +941,16 @@ export default function AnalyzerPage() {
                 {byCategory.map(([category, amount]) => (
                   <li key={category}>
                     <span>{category}</span>
-                    <strong>{formatAmount(amount)}</strong>
+                    <div className="category-row-actions">
+                      <strong>{formatAmount(amount)}</strong>
+                      <button
+                        type="button"
+                        className="export-small"
+                        onClick={() => handleExportCategory(category)}
+                      >
+                        Export
+                      </button>
+                    </div>
                   </li>
                 ))}
               </ul>

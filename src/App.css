@@ -280,6 +280,27 @@ th {
   border-bottom: 1px dashed #dbe1ea;
 }
 
+.category-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+button.export-small {
+  background: #f0fdfa;
+  color: #0f766e;
+  border: 1px solid #99f6e4;
+  border-radius: 6px;
+  padding: 0.2rem 0.5rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button.export-small:hover {
+  background: #ccfbf1;
+}
+
 @media (max-width: 720px) {
   .page-header {
     flex-direction: column;
