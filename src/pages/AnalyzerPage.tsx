@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { extractTransactionsFromFile, suggestCategory } from '../lib/extractTransactions'
 import { isSupabaseConfigured, supabase } from '../lib/supabase'
@@ -83,6 +83,7 @@ function mergeCategories(current: string[], incoming: string[]): string[] {
 
 export default function AnalyzerPage() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [categories, setCategories] = useState<string[]>(BASE_CATEGORIES)
   const [payeeRules, setPayeeRules] = useState<PayeeRule[]>([])
@@ -709,6 +710,8 @@ export default function AnalyzerPage() {
 
     setTransactions([])
     setTransactionSearchTerm('')
+    setSelectedFile(null)
+    if (fileInputRef.current) fileInputRef.current.value = ''
     setMessage('All transactions erased.')
   }
 
@@ -737,6 +740,7 @@ export default function AnalyzerPage() {
 
         <div className="upload-row">
           <input
+            ref={fileInputRef}
             type="file"
             accept=".csv,.tsv,.txt,.xlsx,.pdf,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/pdf"
             onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)}
