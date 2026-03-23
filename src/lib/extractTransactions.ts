@@ -653,7 +653,7 @@ async function parsePdf(buffer: ArrayBuffer): Promise<ParsedTransaction[]> {
     return []
   }
 
-  debugLog('PDF text extracted, attempting parsers...', { textLength: fullText.length, firstChars: fullText.slice(0, 100) })
+  debugLog('PDF text extracted, attempting parsers...', { textLength: fullText.length, firstChars: fullText.slice(0, 500) })
 
   const csvCandidate = parseCsv(fullText)
   if (csvCandidate.length > 0) {
@@ -709,8 +709,39 @@ async function parsePdf(buffer: ArrayBuffer): Promise<ParsedTransaction[]> {
     debugLog('✓ Brute force parser succeeded', { count: bruteCandidate.length })
     return bruteCandidate
   }
-  debugLog('✗ Brute force parser failed - all parsers exhausted')
+  debugLog('✗ Brute force parser failed')
 
+  // Text was extracted but all parsers failed — the embedded text may be garbage/unstructured.
+  // Fall back to OCR unconditionally on the original buffer.
+  debugLog('All text parsers failed — attempting OCR as final fallback on original buffer...')
+  const ocrText = await extractPdfTextWithOcr(buffer)
+  debugLog('OCR final fallback text length', { length: ocrText.length, firstChars: ocrText.slice(0, 200) })
+
+  if (!ocrText.trim()) {
+    debugLog('OCR final fallback returned no text')
+    return []
+  }
+
+  // Run every parser on the OCR output
+  for (const [name, fn] of [
+    ['CSV', parseCsv],
+    ['Line', parseText],
+    ['Statement', parseStatementLikeLines],
+    ['Adjacent', parseAdjacentLinePairs],
+    ['Windowed', parseWindowedLines],
+    ['RunningDate', parseRunningDateLedger],
+    ['Loose', parseLoosePdfText],
+    ['BruteForce', parseBruteForce],
+  ] as Array<[string, (t: string) => ParsedTransaction[]]>) {
+    const result = fn(ocrText)
+    if (result.length > 0) {
+      debugLog(`✓ OCR fallback + ${name} parser succeeded`, { count: result.length })
+      return result
+    }
+    debugLog(`✗ OCR fallback + ${name} parser failed`)
+  }
+
+  debugLog('All parsers exhausted including OCR fallback')
   return []
 }
 
