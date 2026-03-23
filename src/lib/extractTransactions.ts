@@ -648,7 +648,16 @@ async function parsePdf(buffer: ArrayBuffer): Promise<ParsedTransaction[]> {
   }
 
   if (!fullText.trim()) {
-    debugLog('No text extracted from PDF')
+    debugLog('No text extracted from PDF — trying Claude API directly...')
+    try {
+      const claudeResult = await parseWithClaude(buffer)
+      if (claudeResult.length > 0) {
+        debugLog('✓ Claude API (no text) succeeded', { count: claudeResult.length })
+        return claudeResult
+      }
+    } catch (e) {
+      debugLog('✗ Claude API (no text) failed', { error: String(e) })
+    }
     return []
   }
 
@@ -742,7 +751,7 @@ async function parsePdf(buffer: ArrayBuffer): Promise<ParsedTransaction[]> {
 
   debugLog('All parsers exhausted including OCR fallback — trying Claude API fallback...')
   try {
-    const claudeResult = await parseWithClaude(fullText || ocrText)
+    const claudeResult = await parseWithClaude(buffer)
     if (claudeResult.length > 0) {
       debugLog('✓ Claude API fallback succeeded', { count: claudeResult.length })
       return claudeResult
@@ -755,12 +764,16 @@ async function parsePdf(buffer: ArrayBuffer): Promise<ParsedTransaction[]> {
   return []
 }
 
-async function parseWithClaude(text: string): Promise<ParsedTransaction[]> {
-  if (!text.trim()) return []
+async function parseWithClaude(buffer: ArrayBuffer): Promise<ParsedTransaction[]> {
+  const bytes = new Uint8Array(buffer)
+  let binary = ''
+  for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i])
+  const pdfBase64 = btoa(binary)
+
   const res = await fetch('/api/parse-transactions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({ pdfBase64 }),
   })
   if (!res.ok) return []
   const data = await res.json() as { transactions?: unknown[] }

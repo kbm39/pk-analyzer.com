@@ -10,29 +10,16 @@ export default async function handler(req: Request): Promise<Response> {
     return new Response(JSON.stringify({ error: 'Server missing ANTHROPIC_API_KEY' }), { status: 500 })
   }
 
-  let text: string
+  let pdfBase64: string
   try {
     const body = await req.json()
-    text = body?.text
-    if (typeof text !== 'string' || !text.trim()) {
-      return new Response(JSON.stringify({ error: 'Missing text' }), { status: 400 })
-    }
-    if (text.length > 300_000) {
-      return new Response(JSON.stringify({ error: 'Text too large' }), { status: 400 })
+    pdfBase64 = body?.pdfBase64
+    if (typeof pdfBase64 !== 'string' || !pdfBase64.trim()) {
+      return new Response(JSON.stringify({ error: 'Missing pdfBase64' }), { status: 400 })
     }
   } catch {
     return new Response(JSON.stringify({ error: 'Invalid request body' }), { status: 400 })
   }
-
-  const prompt = `You are a bank statement parser. Extract every transaction from the text below and return ONLY a valid JSON array. Each item must have:
-- "date": string in YYYY-MM-DD format
-- "description": string (merchant/payee name)
-- "amount": number (negative for debits/withdrawals, positive for credits/deposits)
-
-Return ONLY the JSON array, no explanation. Example: [{"date":"2023-01-15","description":"WALMART","amount":-45.67}]
-
-Bank statement text:
-${text}`
 
   const r = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -40,11 +27,31 @@ ${text}`
       'Content-Type': 'application/json',
       'x-api-key': apiKey,
       'anthropic-version': '2023-06-01',
+      'anthropic-beta': 'pdfs-2024-09-25',
     },
     body: JSON.stringify({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 4096,
-      messages: [{ role: 'user', content: prompt }],
+      messages: [
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'document',
+              source: { type: 'base64', media_type: 'application/pdf', data: pdfBase64 },
+            },
+            {
+              type: 'text',
+              text: `Extract every transaction from this bank statement and return ONLY a valid JSON array. Each item must have:
+- "date": string in YYYY-MM-DD format
+- "description": string (merchant/payee name)
+- "amount": number (negative for debits/withdrawals, positive for credits/deposits)
+
+Return ONLY the JSON array, no explanation. Example: [{"date":"2023-01-15","description":"WALMART","amount":-45.67}]`,
+            },
+          ],
+        },
+      ],
     }),
   })
 
