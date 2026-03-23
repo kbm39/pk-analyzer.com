@@ -726,7 +726,16 @@ async function parsePdf(buffer: ArrayBuffer): Promise<ParsedTransaction[]> {
   debugLog('OCR final fallback text length', { length: ocrText.length, firstChars: ocrText.slice(0, 200) })
 
   if (!ocrText.trim()) {
-    debugLog('OCR final fallback returned no text')
+    debugLog('OCR final fallback returned no text — trying Claude API...')
+    try {
+      const claudeResult = await parseWithClaude(buffer)
+      if (claudeResult.length > 0) {
+        debugLog('✓ Claude API fallback succeeded', { count: claudeResult.length })
+        return claudeResult
+      }
+    } catch (e) {
+      debugLog('✗ Claude API fallback failed', { error: String(e) })
+    }
     return []
   }
 
