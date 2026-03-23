@@ -1,3 +1,5 @@
+import pdfWorkerSrc from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
+
 export type ParsedTransaction = {
   date: string
   description: string
@@ -610,10 +612,7 @@ async function parsePdf(buffer: ArrayBuffer): Promise<ParsedTransaction[]> {
   try {
     const pdfjsLib = await import('pdfjs-dist')
     if (pdfjsLib.GlobalWorkerOptions) {
-      pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-        'pdfjs-dist/build/pdf.worker.min.mjs',
-        import.meta.url,
-      ).href
+      pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerSrc
     }
     fullText = await extractPdfText(pdfjsLib, buffer)
     debugLog('PDF text extraction (ESM) succeeded', { length: fullText.length })
