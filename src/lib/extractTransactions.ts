@@ -8,15 +8,12 @@ export type ParsedTransaction = {
 }
 
 const MAX_TRANSACTIONS = 1000
-const DEBUG = typeof window !== 'undefined' && (window as any).__DEBUG_PARSE__ === true
 
 const amountPattern = /\(?-?\$?\s*[\d,]+(?:\.\d{1,2})?\)?(?:\s*(?:cr|dr))?|\$?\s*[\d,]+(?:\.\d{1,2})?-(?=\s|$)/i
 const datePattern = /(\d{1,2}\s*[\/\-.]\s*\d{1,2}(?:\s*[\/\-.]\s*\d{2,4})?|\d{4}\s*[\/\-.]\s*\d{1,2}\s*[\/\-.]\s*\d{1,2}|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+\d{1,2}(?:,\s*\d{2,4})?)/i
 
 function debugLog(message: string, data?: unknown): void {
-  if (DEBUG) {
-    console.log(`[PARSE DEBUG] ${message}`, data ?? '')
-  }
+  console.log(`[PARSE DEBUG] ${message}`, data ?? '')
 }
 
 function toNumber(raw: string): number | null {
