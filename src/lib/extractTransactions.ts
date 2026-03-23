@@ -740,8 +740,41 @@ async function parsePdf(buffer: ArrayBuffer): Promise<ParsedTransaction[]> {
     debugLog(`✗ OCR fallback + ${name} parser failed`)
   }
 
-  debugLog('All parsers exhausted including OCR fallback')
+  debugLog('All parsers exhausted including OCR fallback — trying Claude API fallback...')
+  try {
+    const claudeResult = await parseWithClaude(fullText || ocrText)
+    if (claudeResult.length > 0) {
+      debugLog('✓ Claude API fallback succeeded', { count: claudeResult.length })
+      return claudeResult
+    }
+  } catch (e) {
+    debugLog('✗ Claude API fallback failed', { error: String(e) })
+  }
+
+  debugLog('All parsers exhausted including Claude fallback')
   return []
+}
+
+async function parseWithClaude(text: string): Promise<ParsedTransaction[]> {
+  if (!text.trim()) return []
+  const res = await fetch('/api/parse-transactions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text }),
+  })
+  if (!res.ok) return []
+  const data = await res.json() as { transactions?: unknown[] }
+  if (!Array.isArray(data.transactions)) return []
+  return data.transactions
+    .filter(
+      (t): t is { date: string; description: string; amount: number } =>
+        typeof t === 'object' &&
+        t !== null &&
+        typeof (t as Record<string, unknown>).date === 'string' &&
+        typeof (t as Record<string, unknown>).description === 'string' &&
+        typeof (t as Record<string, unknown>).amount === 'number',
+    )
+    .map((t) => ({ date: t.date, description: t.description, amount: t.amount }))
 }
 
 export async function extractTransactionsFromFile(file: File): Promise<ParsedTransaction[]> {
