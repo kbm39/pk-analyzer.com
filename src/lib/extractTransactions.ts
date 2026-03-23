@@ -8,8 +8,8 @@ export type ParsedTransaction = {
 const MAX_TRANSACTIONS = 1000
 const DEBUG = typeof window !== 'undefined' && (window as any).__DEBUG_PARSE__ === true
 
-const amountPattern = /\(?-?\$?\s*[\d,]+(?:\.\d{1,2})?\)?(?:\s*(?:cr|dr))?|\$?\s*[\d,]+(?:\.\d{1,2})?-\b/i
-const datePattern = /(\d{1,2}[\/-]\d{1,2}(?:[\/-]\d{2,4})?|\d{4}[\/-]\d{1,2}[\/-]\d{1,2}|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+\d{1,2}(?:,\s*\d{2,4})?)/i
+const amountPattern = /\(?-?\$?\s*[\d,]+(?:\.\d{1,2})?\)?(?:\s*(?:cr|dr))?|\$?\s*[\d,]+(?:\.\d{1,2})?-(?=\s|$)/i
+const datePattern = /(\d{1,2}\s*[\/\-.]\s*\d{1,2}(?:\s*[\/\-.]\s*\d{2,4})?|\d{4}\s*[\/\-.]\s*\d{1,2}\s*[\/\-.]\s*\d{1,2}|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+\d{1,2}(?:,\s*\d{2,4})?)/i
 
 function debugLog(message: string, data?: unknown): void {
   if (DEBUG) {
@@ -289,6 +289,96 @@ function parseAdjacentLinePairs(text: string): ParsedTransaction[] {
       amount,
     })
     i += 1
+  }
+
+  return records
+}
+
+function parseWindowedLines(text: string): ParsedTransaction[] {
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+
+  const records: ParsedTransaction[] = []
+
+  for (let i = 0; i < lines.length && records.length < MAX_TRANSACTIONS; i += 1) {
+    for (let windowSize = 2; windowSize <= 4; windowSize += 1) {
+      if (i + windowSize > lines.length) break
+
+      const combined = lines.slice(i, i + windowSize).join(' ')
+      const dateMatch = combined.match(datePattern)
+      if (!dateMatch) continue
+
+      const amountMatches = Array.from(combined.matchAll(new RegExp(amountPattern, 'gi')))
+      const amountToken = amountMatches.length > 0 ? amountMatches[amountMatches.length - 1][0] : null
+      if (!amountToken) continue
+
+      const amount = toNumber(amountToken)
+      if (amount === null) continue
+
+      const dateToken = dateMatch[0]
+      const description = combined
+        .replace(dateToken, ' ')
+        .replace(amountToken, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+
+      if (!description || description.length < 2) continue
+
+      records.push({
+        date: normalizeDate(dateToken),
+        description,
+        amount,
+      })
+
+      i += windowSize - 1
+      break
+    }
+  }
+
+  return records
+}
+
+function parseRunningDateLedger(text: string): ParsedTransaction[] {
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+
+  const records: ParsedTransaction[] = []
+  let activeDate: string | null = null
+
+  for (const line of lines) {
+    if (records.length >= MAX_TRANSACTIONS) break
+
+    const dateMatch = line.match(datePattern)
+    if (dateMatch) {
+      activeDate = normalizeDate(dateMatch[0])
+    }
+
+    if (!activeDate) continue
+
+    const amountMatches = Array.from(line.matchAll(new RegExp(amountPattern, 'gi')))
+    const amountToken = amountMatches.length > 0 ? amountMatches[amountMatches.length - 1][0] : null
+    if (!amountToken) continue
+
+    const amount = toNumber(amountToken)
+    if (amount === null) continue
+
+    const description = line
+      .replace(datePattern, ' ')
+      .replace(amountToken, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+
+    if (!description || description.length < 2) continue
+
+    records.push({
+      date: activeDate,
+      description,
+      amount,
+    })
   }
 
   return records
@@ -593,6 +683,20 @@ async function parsePdf(buffer: ArrayBuffer): Promise<ParsedTransaction[]> {
   }
   debugLog('✗ Adjacent lines parser failed')
 
+  const windowedCandidate = parseWindowedLines(fullText)
+  if (windowedCandidate.length > 0) {
+    debugLog('✓ Windowed lines parser succeeded', { count: windowedCandidate.length })
+    return windowedCandidate
+  }
+  debugLog('✗ Windowed lines parser failed')
+
+  const runningDateCandidate = parseRunningDateLedger(fullText)
+  if (runningDateCandidate.length > 0) {
+    debugLog('✓ Running date parser succeeded', { count: runningDateCandidate.length })
+    return runningDateCandidate
+  }
+  debugLog('✗ Running date parser failed')
+
   const looseCandidate = parseLoosePdfText(fullText)
   if (looseCandidate.length > 0) {
     debugLog('✓ Loose PDF parser succeeded', { count: looseCandidate.length })
@@ -673,6 +777,18 @@ export async function extractTransactionsFromFile(file: File): Promise<ParsedTra
     if (adjacentCandidate.length > 0) {
       debugLog(`Adjacent parser found ${adjacentCandidate.length} transactions`)
       return adjacentCandidate
+    }
+
+    const windowedCandidate = parseWindowedLines(text)
+    if (windowedCandidate.length > 0) {
+      debugLog(`Windowed parser found ${windowedCandidate.length} transactions`)
+      return windowedCandidate
+    }
+
+    const runningDateCandidate = parseRunningDateLedger(text)
+    if (runningDateCandidate.length > 0) {
+      debugLog(`Running date parser found ${runningDateCandidate.length} transactions`)
+      return runningDateCandidate
     }
 
     const looseCandidate = parseLoosePdfText(text)
